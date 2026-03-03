@@ -1,4 +1,4 @@
-import pdf from 'pdf-parse';
+import {PDFParse} from 'pdf-parse';
 import { GoogleGenAI } from "@google/genai";
 import dotenv from 'dotenv';
 
@@ -15,7 +15,7 @@ const extractTextFromPDF = async (buffer) => {
     console.log('Buffer size:', buffer.length);
 
     // pdf-parse works directly with Buffer
-    const data = await pdf(buffer);
+    const data = await PDFParse(buffer);
     
     console.log('PDF text extracted successfully');
     console.log('Extracted text length:', data.text.length);
