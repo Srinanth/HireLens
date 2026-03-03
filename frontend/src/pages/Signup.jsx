@@ -8,7 +8,6 @@ import Button from '../components/common/Button';
 const Signup = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -16,23 +15,37 @@ const Signup = () => {
     e.preventDefault();
     setLoading(true);
 
-    // 1. Sign up the user in Supabase Auth
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: fullName } // Stores name in metadata
-      }
-    });
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`
+        }
+      });
 
-    if (error) {
-      toast.error(error.message);
-    } else {
-      toast.success("Account created! Welcome to CareerSync.");
-      // Redirect to profile setup to upload resume
-      navigate('/profile'); 
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+
+      if (data?.user) {
+        // Get the session to store the token
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session?.access_token) {
+          localStorage.setItem('authToken', session.access_token);
+        }
+
+        toast.success('Account created! Please verify your email and login.');
+        navigate('/login');
+      }
+    } catch (error) {
+      console.error('Signup error:', error);
+      toast.error('Failed to create account');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

@@ -1,20 +1,33 @@
-import { supabase } from '../config/supabase.js';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
 
-export const protect = async (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
+dotenv.config();
 
-  if (!token) {
-    return res.status(401).json({ message: "No token provided" });
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+export const authMiddleware = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({ error: 'No authentication token provided' });
+    }
+
+    const { data, error } = await supabase.auth.getUser(token);
+
+    if (error || !data.user) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    req.user = data.user;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(401).json({ error: 'Authentication failed' });
   }
-
-  // Use Supabase to verify the token
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-
-  if (error || !user) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-
-  // Attach the user to the request object so controllers can use it
-  req.user = user;
-  next();
 };
+
+export default authMiddleware;

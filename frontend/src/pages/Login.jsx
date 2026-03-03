@@ -10,19 +10,47 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { user } = useAuth();
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (user) {
+      navigate('/profile-setup');
+    }
+  }, [user, navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (error) {
-      toast.error(error.message);
-    } else {
-      toast.success("Welcome back!");
-      navigate('/dashboard');
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+
+      if (data?.session?.access_token) {
+        // Explicitly store the token
+        localStorage.setItem('authToken', data.session.access_token);
+        
+        toast.success('Logged in successfully!');
+        
+        // Small delay to ensure token is stored
+        setTimeout(() => {
+          navigate('/profile-setup');
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      toast.error('Failed to login');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

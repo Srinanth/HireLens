@@ -1,279 +1,496 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../services/supabase';
-import { 
-  User, MapPin, Globe, Github, Plus, 
-  Trash2, FileText, Upload, Loader2, Check, Save 
-} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import axios from 'axios';
+import { Upload, Github, Plus, X, Loader2 } from 'lucide-react';
 
 const ProfileSetup = () => {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, token } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [parsing, setParsing] = useState(false);
-  
-  // Form State
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [formData, setFormData] = useState({
-    full_name: '',
+    fullName: '',
     location: '',
-    website_url: '',
+    bio: '',
     github_username: '',
+    linkedin_url: '',
+    portfolio_url: '',
     skills: [],
+    experience: [],
+    education: [],
     projects: [],
-    experience: []
+    certifications: [],
+    internships: [],
+    achievements: []
   });
 
-  const [newSkill, setNewSkill] = useState('');
-
-  // Sync profile data when it loads
+  // Redirect if not logged in
   useEffect(() => {
-    if (profile) {
-      setFormData({
-        full_name: profile.full_name || '',
-        location: profile.location || '',
-        website_url: profile.website_url || '',
-        github_username: profile.github_username || '',
-        skills: profile.skills || [],
-        projects: profile.projects || [],
-        experience: profile.experience || []
-      });
-    }
-  }, [profile]);
+    const authToken = localStorage.getItem('authToken') || token;
+    console.log('ProfileSetup - Auth Token:', authToken ? 'Present' : 'Missing');
+    console.log('ProfileSetup - User:', user);
 
-  // --- FEATURE 1: RESUME UPLOAD & AUTO-FILL ---
-  const handleResumeUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-  
-    setParsing(true);
-    const formDataFile = new FormData();
-    formDataFile.append('resume', file);
-  
+    if (!user && !authToken) {
+      toast.error('Please login first');
+      navigate('/login');
+    }
+  }, [user, token, navigate]);
+
+  // Get auth token from context or localStorage
+  const getAuthToken = () => {
+    if (token) {
+      console.log('Token from context');
+      return token;
+    }
+    
+    const storedToken = localStorage.getItem('authToken');
+    if (storedToken) {
+      console.log('Token from localStorage');
+      return storedToken;
+    }
+
+    console.warn('No auth token found');
+    return null;
+  };
+
+  // --- FEATURE 1: RESUME UPLOAD & PARSING ---
+  const handleResumeUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      console.log('No file selected');
+      return;
+    }
+
+    console.log('File selected:', {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
+
+    // Validate file type
+    if (file.type !== 'application/pdf') {
+      toast.error('Please upload a PDF file');
+      console.warn('Invalid file type:', file.type);
+      return;
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('File size must be less than 5MB');
+      console.warn('File too large:', file.size);
+      return;
+    }
+
+    setLoading(true);
+    setUploadProgress(0);
+
     try {
-      const response = await axios.post('http://localhost:5000/api/profile/parse', formDataFile);
-      
+      const authToken = getAuthToken();
+
+      if (!authToken) {
+        console.error('No authentication token available');
+        toast.error('Authentication required. Please login again.');
+        navigate('/login');
+        return;
+      }
+
+      const formDataToSend = new FormData();
+      formDataToSend.append('resume', file);
+
+      console.log('Starting resume upload...');
+      console.log('Endpoint: http://localhost:5000/api/resume/parse');
+      console.log('Auth Token length:', authToken.length);
+
+      const response = await axios.post(
+        'http://localhost:5000/api/resume/parse',
+        formDataToSend,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${authToken}`
+          },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+            setUploadProgress(percentCompleted);
+            console.log(`Upload progress: ${percentCompleted}%`);
+          }
+        }
+      );
+
+      console.log('Resume upload successful:', response.data);
+
       if (response.data.success) {
-        const parsed = response.data.data;
-        
+        const parsedResume = response.data.data;
+        console.log('Parsed resume data:', parsedResume);
+
+        // Extract data from parsed resume
+        const extractedData = {
+          fullName: parsedResume.personalInfo?.fullName || formData.fullName,
+          location: parsedResume.personalInfo?.location || formData.location,
+          linkedin_url: parsedResume.personalInfo?.linkedinUrl || formData.linkedin_url,
+          portfolio_url: parsedResume.personalInfo?.portfolioUrl || formData.portfolio_url,
+          skills: [...new Set([...formData.skills, ...(parsedResume.skills || [])])],
+          experience: parsedResume.experience || [],
+          education: parsedResume.education || [],
+          projects: parsedResume.projects || [],
+          certifications: parsedResume.certifications || [],
+          internships: parsedResume.internships || [],
+          achievements: parsedResume.achievements || []
+        };
+
+        console.log('Extracted data:', extractedData);
+
         setFormData(prev => ({
           ...prev,
-          // Fill basic details if they were found
-          full_name: parsed.full_name || prev.full_name,
-          github_username: parsed.github_username || prev.github_username,
-          cgpa: parsed.cgpa || prev.cgpa,
-          
-          // Append new skills and remove duplicates
-          skills: [...new Set([...prev.skills, ...parsed.skills])],
-          
-          // Overwrite or append projects/experience
-          projects: parsed.projects.length > 0 ? parsed.projects : prev.projects,
-          experience: parsed.experience.length > 0 ? parsed.experience : prev.experience
+          ...extractedData
         }));
-        
-        toast.success("Resume parsed successfully!");
+
+        toast.success('Resume parsed successfully! Review and update details as needed.');
+      } else {
+        console.error('Unexpected response format:', response.data);
+        toast.error('Unexpected response format from server');
       }
     } catch (error) {
-      console.error("Parsing error:", error);
-      toast.error("Failed to parse resume. Check console for details.");
+      console.error('Resume upload error:', error);
+
+      // Log detailed error information
+      if (error.response) {
+        console.error('Error response status:', error.response.status);
+        console.error('Error response data:', error.response.data);
+        console.error('Error response headers:', error.response.headers);
+
+        if (error.response.status === 401) {
+          console.error('Authentication failed - token may be invalid or expired');
+          toast.error('Authentication failed. Please login again.');
+          localStorage.removeItem('authToken');
+          navigate('/login');
+        } else if (error.response.status === 400) {
+          console.error('Bad request - file validation failed');
+          toast.error(error.response.data.error || 'Invalid file format');
+        } else if (error.response.status === 500) {
+          console.error('Server error occurred');
+          toast.error('Server error. Please check the backend logs.');
+        } else {
+          toast.error(error.response.data.error || 'Failed to parse resume');
+        }
+      } else if (error.request) {
+        console.error('No response from server. Request:', error.request);
+        toast.error('No response from server. Please check if backend is running.');
+      } else if (error.message === 'Network Error') {
+        console.error('Network error occurred');
+        toast.error('Network error. Please check your connection.');
+      } else {
+        console.error('Unknown error:', error.message);
+        toast.error('An unexpected error occurred: ' + error.message);
+      }
     } finally {
-      setParsing(false);
+      setLoading(false);
+      setUploadProgress(0);
+      event.target.value = '';
     }
   };
 
   // --- FEATURE 2: GITHUB SKILL SYNC ---
   const syncGithubSkills = async () => {
-    if (!formData.github_username) return toast.error("Enter GitHub username first");
-    
+    if (!formData.github_username) {
+      toast.error('Enter GitHub username first');
+      return;
+    }
+
     setLoading(true);
     try {
-      const response = await axios.get(`http://localhost:5000/api/profile/github/${formData.github_username}`);
-      if (response.data.success) {
+      const authToken = getAuthToken();
+
+      if (!authToken) {
+        toast.error('Authentication required. Please login again.');
+        navigate('/login');
+        return;
+      }
+
+      const response = await axios.get(
+        `http://localhost:5000/api/skills/github/${formData.github_username}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          }
+        }
+      );
+
+      if (response.data.skills) {
+        const githubSkills = response.data.skills;
+        const mergedSkills = [...new Set([...formData.skills, ...githubSkills])];
+
         setFormData(prev => ({
           ...prev,
-          skills: [...new Set([...prev.skills, ...response.data.skills])]
+          skills: mergedSkills
         }));
-        toast.success("Skills synced from GitHub!");
+
+        toast.success(`Added ${githubSkills.length} skills from GitHub!`);
       }
     } catch (error) {
-      toast.error("Could not fetch GitHub data.");
+      console.error('Error syncing GitHub skills:', error);
+      toast.error(error.response?.data?.error || 'Failed to fetch GitHub skills');
     } finally {
       setLoading(false);
     }
   };
 
-  // --- FEATURE 3: MANUAL UPDATES ---
-  const handleSave = async () => {
+  // Handle form input changes
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  // Add skill manually
+  const addSkill = (skill) => {
+    if (skill.trim() && !formData.skills.includes(skill.trim())) {
+      setFormData(prev => ({
+        ...prev,
+        skills: [...prev.skills, skill.trim()]
+      }));
+    }
+  };
+
+  // Remove skill
+  const removeSkill = (skillToRemove) => {
+    setFormData(prev => ({
+      ...prev,
+      skills: prev.skills.filter(skill => skill !== skillToRemove)
+    }));
+  };
+
+  // Save profile
+  const saveProfile = async () => {
+    if (!formData.fullName || !formData.location) {
+      toast.error('Please fill in required fields: Full Name and Location');
+      return;
+    }
+
     setLoading(true);
     try {
-      // 1. Update Profile (Basics + Projects + Experience)
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .update({
-          full_name: formData.full_name,
-          location: formData.location,
-          website_url: formData.website_url,
-          github_username: formData.github_username,
-          projects: formData.projects,
-          experience: formData.experience,
-          updated_at: new Date()
-        })
-        .eq('id', user.id);
-  
-      if (profileError) throw profileError;
-  
-      // 2. Sync Skills (This is trickier because skills are separate rows)
-      // First, clear existing and re-insert (simple approach) OR upsert
-      await supabase.from('skills').delete().eq('user_id', user.id);
-      
-      const skillsToInsert = formData.skills.map(skillName => ({
-        user_id: user.id,
-        name: skillName,
-        level: 1, // Default
-        source: 'manual' 
-      }));
-  
-      const { error: skillError } = await supabase
-        .from('skills')
-        .insert(skillsToInsert);
-  
-      if (skillError) throw skillError;
-  
-      toast.success("Full profile and skills updated!");
-      refreshProfile();
+      const authToken = getAuthToken();
+
+      if (!authToken) {
+        toast.error('Authentication required. Please login again.');
+        navigate('/login');
+        return;
+      }
+
+      const response = await axios.post(
+        'http://localhost:5000/api/profile',
+        formData,
+        {
+          headers: {
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      toast.success('Profile saved successfully!');
+      navigate('/jobs');
     } catch (error) {
-      console.error(error);
-      toast.error("Update failed.");
+      console.error('Error saving profile:', error);
+      toast.error(error.response?.data?.error || 'Failed to save profile');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const addSkill = () => {
-    if (newSkill && !formData.skills.includes(newSkill)) {
-      setFormData({ ...formData, skills: [...formData.skills, newSkill] });
-      setNewSkill('');
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto py-12 px-4">
-      <div className="mb-10 text-center">
-        <h1 className="text-3xl font-black text-slate-900">Complete Your Profile</h1>
-        <p className="text-slate-500">This data powers your AI job matching and rankings.</p>
+    <div className="max-w-4xl mx-auto px-4 py-10">
+      <h1 className="text-4xl font-bold text-slate-900 mb-8">Complete Your Profile</h1>
+
+      {/* Basic Info */}
+      <div className="bg-white p-6 rounded-xl shadow-md border border-slate-200 mb-6">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">Basic Information</h2>
+
+        <div className="space-y-4">
+          <input
+            type="text"
+            name="fullName"
+            placeholder="Full Name *"
+            value={formData.fullName}
+            onChange={handleInputChange}
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+          />
+
+          <input
+            type="text"
+            name="location"
+            placeholder="Location *"
+            value={formData.location}
+            onChange={handleInputChange}
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+          />
+
+          <textarea
+            name="bio"
+            placeholder="Bio (Optional)"
+            value={formData.bio}
+            onChange={handleInputChange}
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+            rows="3"
+          />
+        </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-8">
-        {/* Sidebar: Resume & Quick Actions */}
-        <div className="space-y-6">
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-            <h3 className="font-bold flex items-center gap-2 mb-4"><FileText size={18}/> Smart Upload</h3>
-            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-200 rounded-2xl cursor-pointer hover:bg-slate-50 transition-colors">
-              {parsing ? (
-                <Loader2 className="animate-spin text-blue-600" />
-              ) : (
-                <div className="flex flex-col items-center text-slate-400">
-                  <Upload size={24} />
-                  <span className="text-xs mt-2 font-medium">Upload Resume</span>
-                </div>
-              )}
-              <input type="file" className="hidden" onChange={handleResumeUpload} accept=".pdf,.docx" />
-            </label>
-            <p className="text-[10px] text-slate-400 mt-3 text-center">AI will extract skills, projects, and internships.</p>
-          </div>
+      {/* Resume Upload */}
+      <div className="bg-white p-6 rounded-xl shadow-md border border-slate-200 mb-6">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">Upload Resume</h2>
 
-          <div className="bg-blue-600 p-6 rounded-3xl text-white shadow-lg">
-            <h3 className="font-bold flex items-center gap-2 mb-2"><Github size={18}/> GitHub Sync</h3>
-            <p className="text-xs opacity-80 mb-4">Pull top languages and skills from your repos.</p>
-            <button 
-              onClick={syncGithubSkills}
-              className="w-full bg-white/20 hover:bg-white/30 py-2 rounded-xl text-sm font-bold transition-all"
-            >
-              Sync Now
-            </button>
-          </div>
-        </div>
-
-        {/* Main Form */}
-        <div className="md:col-span-2 space-y-8">
-          {/* Basics */}
-          <section className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-            <h2 className="text-xl font-bold mb-4">Personal Details</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1 col-span-2 md:col-span-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Full Name</label>
-                <input 
-                  className="w-full bg-slate-50 border-none rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                  value={formData.full_name}
-                  onChange={e => setFormData({...formData, full_name: e.target.value})}
-                />
-              </div>
-              <div className="space-y-1 col-span-2 md:col-span-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Location</label>
-                <input 
-                  className="w-full bg-slate-50 border-none rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                  value={formData.location}
-                  onChange={e => setFormData({...formData, location: e.target.value})}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">GitHub Username</label>
-                <input 
-                  className="w-full bg-slate-50 border-none rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                  value={formData.github_username}
-                  onChange={e => setFormData({...formData, github_username: e.target.value})}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-500 uppercase">Portfolio/Website</label>
-                <input 
-                  className="w-full bg-slate-50 border-none rounded-xl p-3 focus:ring-2 focus:ring-blue-500 outline-none"
-                  value={formData.website_url}
-                  onChange={e => setFormData({...formData, website_url: e.target.value})}
-                />
-              </div>
+        <label className="flex items-center justify-center w-full px-4 py-6 border-2 border-dashed border-blue-400 rounded-lg cursor-pointer hover:bg-blue-50 transition">
+          {loading && uploadProgress > 0 ? (
+            <div className="text-center">
+              <Loader2 className="animate-spin text-blue-600 mx-auto mb-2" size={24} />
+              <span className="text-blue-600 font-semibold">
+                Uploading... {uploadProgress}%
+              </span>
             </div>
-          </section>
+          ) : (
+            <>
+              <Upload size={24} className="text-blue-600 mr-2" />
+              <span className="text-blue-600 font-semibold">
+                Click to upload PDF resume
+              </span>
+            </>
+          )}
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={handleResumeUpload}
+            disabled={loading}
+            className="hidden"
+          />
+        </label>
 
-          {/* Skills */}
-          <section className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-            <h2 className="text-xl font-bold mb-4">Skills Stack</h2>
-            <div className="flex gap-2 mb-4">
-              <input 
-                placeholder="Add skill (e.g. React)"
-                className="flex-1 bg-slate-50 border-none rounded-xl p-3 outline-none"
-                value={newSkill}
-                onChange={e => setNewSkill(e.target.value)}
-                onKeyPress={e => e.key === 'Enter' && addSkill()}
-              />
-              <button onClick={addSkill} className="bg-slate-900 text-white p-3 rounded-xl hover:bg-slate-800 transition-all">
-                <Plus size={20}/>
+        <p className="text-sm text-slate-500 mt-2">
+          We'll automatically extract your skills, experience, education, and projects
+        </p>
+      </div>
+
+      {/* GitHub Sync */}
+      <div className="bg-white p-6 rounded-xl shadow-md border border-slate-200 mb-6">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">GitHub Integration</h2>
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            name="github_username"
+            placeholder="GitHub username"
+            value={formData.github_username}
+            onChange={handleInputChange}
+            className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+          />
+
+          <button
+            onClick={syncGithubSkills}
+            disabled={loading}
+            className="px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition flex items-center gap-2 disabled:opacity-50"
+          >
+            <Github size={18} />
+            Sync Skills
+          </button>
+        </div>
+      </div>
+
+      {/* Skills */}
+      <div className="bg-white p-6 rounded-xl shadow-md border border-slate-200 mb-6">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">Skills</h2>
+
+        <div className="flex flex-wrap gap-2 mb-4">
+          {formData.skills.map((skill, index) => (
+            <div
+              key={index}
+              className="flex items-center gap-2 bg-blue-100 text-blue-800 px-3 py-1 rounded-full"
+            >
+              {skill}
+              <button
+                onClick={() => removeSkill(skill)}
+                className="text-blue-600 hover:text-blue-800"
+              >
+                <X size={16} />
               </button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {formData.skills.map((skill, i) => (
-                <span key={i} className="flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-full text-sm font-bold border border-blue-100">
-                  {skill}
-                  <button onClick={() => setFormData({...formData, skills: formData.skills.filter(s => s !== skill)})}>
-                    <Trash2 size={14} className="text-blue-300 hover:text-red-500" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          </section>
-
-          {/* Action Footer */}
-          <div className="flex justify-end pt-4">
-            <button 
-              onClick={handleSave}
-              disabled={loading}
-              className="flex items-center gap-2 bg-blue-600 text-white px-10 py-4 rounded-2xl font-bold shadow-xl hover:bg-blue-700 transition-all disabled:opacity-50"
-            >
-              {loading ? <Loader2 className="animate-spin" /> : <Save size={20} />}
-              Save Profile
-            </button>
-          </div>
+          ))}
         </div>
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            id="skillInput"
+            placeholder="Add skill and press Enter"
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                addSkill(e.target.value);
+                e.target.value = '';
+              }
+            }}
+            className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+          />
+
+          <button
+            onClick={() => {
+              const input = document.getElementById('skillInput');
+              addSkill(input.value);
+              input.value = '';
+            }}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+          >
+            <Plus size={18} />
+            Add
+          </button>
+        </div>
+      </div>
+
+      {/* Social Links */}
+      <div className="bg-white p-6 rounded-xl shadow-md border border-slate-200 mb-6">
+        <h2 className="text-2xl font-bold text-slate-900 mb-4">Social Links</h2>
+
+        <div className="space-y-4">
+          <input
+            type="url"
+            name="linkedin_url"
+            placeholder="LinkedIn URL"
+            value={formData.linkedin_url}
+            onChange={handleInputChange}
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+          />
+
+          <input
+            type="url"
+            name="portfolio_url"
+            placeholder="Portfolio URL"
+            value={formData.portfolio_url}
+            onChange={handleInputChange}
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500"
+          />
+        </div>
+      </div>
+
+      {/* Save Button */}
+      <div className="flex gap-4">
+        <button
+          onClick={saveProfile}
+          disabled={loading}
+          className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 font-semibold"
+        >
+          {loading ? 'Saving...' : 'Save Profile'}
+        </button>
+
+        <button
+          onClick={() => navigate('/jobs')}
+          className="flex-1 px-6 py-3 bg-slate-200 text-slate-900 rounded-lg hover:bg-slate-300 transition font-semibold"
+        >
+          Skip for Now
+        </button>
       </div>
     </div>
   );
