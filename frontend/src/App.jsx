@@ -15,9 +15,9 @@ import JobListing from './pages/JobListing';
 import JobDetail from './pages/JobDetail';
 import RoadmapView from './pages/RoadmapView';
 import AppliedJobs from './pages/AppliedJobs';
-import CampusRankings from './pages/CampusRankings';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import RankingsPage from './pages/CampusRankings';
 
 // Helper: Scroll to top on every route change
 const ScrollToTop = () => {
@@ -51,10 +51,9 @@ function App() {
     <Router>
       <ScrollToTop />
       <div className="min-h-screen flex flex-col bg-slate-50">
-        {/* Navigation Bar always at the top */}
+
         <Navbar />
         
-        {/* Main Content Area */}
         <main className="grow">
           <Routes>
             {/* Public Access */}
@@ -82,7 +81,7 @@ function App() {
             } />
             
             <Route path="/rankings" element={
-              <ProtectedRoute><CampusRankings /></ProtectedRoute>
+              <ProtectedRoute><RankingsPage /></ProtectedRoute>
             } />
 
             {/* Catch-all Redirect */}

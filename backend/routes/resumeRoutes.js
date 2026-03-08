@@ -1,15 +1,23 @@
 import express from 'express';
 import multer from 'multer';
-import { parseResume } from '../controllers/resumeController.js';
+import {
+  uploadResume,
+  getResume,
+  deleteResume
+} from '../controllers/resumeController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Configure multer for file uploads
+// Configure multer for file upload
+const storage = multer.memoryStorage();
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
   fileFilter: (req, file, cb) => {
+    // Only allow PDF files
     if (file.mimetype === 'application/pdf') {
       cb(null, true);
     } else {
@@ -18,7 +26,13 @@ const upload = multer({
   }
 });
 
-// POST endpoint to parse resume
-router.post('/parse', authMiddleware, upload.single('resume'), parseResume);
+// Upload resume (with PDF file)
+router.post('/upload', authMiddleware, upload.single('resume'), uploadResume);
+
+// Get resume
+router.get('/', authMiddleware, getResume);
+
+// Delete resume
+router.delete('/', authMiddleware, deleteResume);
 
 export default router;

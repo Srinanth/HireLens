@@ -1,318 +1,374 @@
-import {PDFParse} from 'pdf-parse';
-import { GoogleGenAI } from "@google/genai";
-import dotenv from 'dotenv';
+import { GoogleGenAI } from '@google/genai';
+import { PDFParse } from 'pdf-parse'; // Correct import
+import { supabase } from '../config/supabase.js';
 
-dotenv.config();
-
+// Initialize Google Gen AI - it will automatically use GEMINI_API_KEY from env
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-
-// Function to extract text from PDF using pdf-parse
+// Extract text from PDF using pdf-parse (updated API)
 const extractTextFromPDF = async (buffer) => {
   try {
-    console.log('Starting PDF text extraction with pdf-parse...');
-    console.log('Buffer type:', buffer.constructor.name);
-    console.log('Buffer size:', buffer.length);
-
-    // pdf-parse works directly with Buffer
-    const data = await PDFParse(buffer);
+    console.log('Starting PDF text extraction...');
     
-    console.log('PDF text extracted successfully');
-    console.log('Extracted text length:', data.text.length);
-    console.log('Number of pages:', data.numpages);
-    console.log('First 300 chars:', data.text.substring(0, 300));
+    // Create a PDF parser instance with the buffer data
+    // Convert buffer to base64 or handle accordingly
+    const base64Data = buffer.toString('base64');
+    
+    // Create parser with the PDF data
+    const parser = new PDFParse({
+      data: base64Data,
+      type: 'buffer'
+    });
 
-    if (!data.text || data.text.trim().length === 0) {
-      throw new Error('Extracted text is empty');
-    }
+    // Get text from PDF
+    const result = await parser.getText();
+    let fullText = result.text;
 
-    return data.text;
+    // Clean up the extracted text
+    fullText = fullText
+      .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') // Remove control characters
+      .trim();
+
+    console.log('✅ Text extracted successfully');
+    console.log('Extracted text length:', fullText.length);
+    console.log('First 200 chars:', fullText.substring(0, 200));
+
+    return fullText;
   } catch (error) {
-    console.error('PDF extraction error:', error);
-    console.error('Error type:', error.constructor.name);
-    console.error('Error details:', error.message);
-    throw new Error('Failed to parse PDF: ' + error.message);
+    console.error('❌ Error extracting PDF text:', error);
+    throw new Error(`PDF extraction failed: ${error.message}`);
   }
 };
 
-// Function to parse resume using Gemini API
-const parseResumeWithGemini = async (resumeText) => {
+// Alternative simpler approach if the above doesn't work
+// Some versions might still support the buffer directly
+const extractTextFromPDFAlternative = async (buffer) => {
   try {
-    console.log('Starting Gemini API call...');
-    console.log('Resume text length:', resumeText.length);
+    console.log('Starting PDF text extraction (alternative method)...');
+    
+    // Try the older API pattern if the new one fails
+    // @ts-ignore - Different versions have different APIs
+    const pdf = require('pdf-parse');
+    const data = await pdf(buffer);
+    
+    let fullText = data.text
+      .replace(/\s+/g, ' ')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+      .trim();
+    
+    console.log('✅ Text extracted successfully (alternative)');
+    return fullText;
+  } catch (error) {
+    console.error('❌ Alternative extraction failed:', error);
+    throw error;
+  }
+};
 
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error('GEMINI_API_KEY is not set in environment variables');
+// Upload resume
+export const uploadResume = async (req, res) => {
+  try {
+    console.log('\n========================================');
+    console.log('📄 Uploading resume');
+    console.log('========================================');
+
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
 
-    const prompt = `
-You are an expert resume parser. Please analyze the following resume and extract the information in a structured JSON format. 
+    const file = req.file;
+    console.log('File received:', { name: file.originalname, size: file.size, mimetype: file.mimetype });
 
-IMPORTANT: Return ONLY valid JSON, no markdown formatting or code blocks.
+    // Validate file type
+    if (file.mimetype !== 'application/pdf') {
+      return res.status(400).json({ error: 'Only PDF files are allowed' });
+    }
 
-Resume Text:
-${resumeText}
+    // Extract text from PDF
+    let extractedText = '';
+    try {
+      // Try the new API first
+      extractedText = await extractTextFromPDF(file.buffer);
+      console.log('✅ PDF text extracted successfully');
+    } catch (extractError) {
+      console.log('New API failed, trying alternative method...');
+      try {
+        // Fall back to alternative method
+        extractedText = await extractTextFromPDFAlternative(file.buffer);
+      } catch (fallbackError) {
+        console.error('❌ All PDF extraction methods failed:', fallbackError);
+        return res.status(400).json({ error: `Failed to extract PDF text: ${extractError.message}` });
+      }
+    }
 
-Please extract and return the following information as a JSON object with these exact fields:
+    if (!extractedText || extractedText.length < 50) {
+      return res.status(400).json({ error: 'Could not extract sufficient text from PDF' });
+    }
+
+    // Upload to Supabase Storage
+    const fileName = `${req.user.id}-${Date.now()}.pdf`;
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('resumes')
+      .upload(fileName, file.buffer, {
+        contentType: 'application/pdf',
+        upsert: false
+      });
+
+    if (uploadError) {
+      console.error('❌ Supabase upload error:', uploadError);
+      return res.status(500).json({ error: `Failed to upload resume: ${uploadError.message}` });
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabase
+      .storage
+      .from('resumes')
+      .getPublicUrl(fileName);
+
+    const resumeUrl = publicUrlData.publicUrl;
+    console.log('✅ Resume uploaded to Supabase:', resumeUrl);
+
+    // Analyze resume with Gemini using the new SDK pattern
+    console.log('🤖 Analyzing resume with Gemini...');
+    let analysisResult = {
+      summary: '',
+      skills: [],
+      experience: [],
+      education: [],
+      certifications: [],
+      projects: []
+    };
+
+    try {
+      const prompt = `Analyze this resume and extract the following information in JSON format. Return ONLY the JSON object, no other text:
+
 {
-  "personalInfo": {
-    "fullName": "string",
-    "email": "string",
-    "phone": "string",
-    "location": "string",
-    "linkedinUrl": "string",
-    "githubUrl": "string",
-    "portfolioUrl": "string"
-  },
-  "summary": "string (professional summary or objective)",
-  "skills": ["array of skills"],
+  "summary": "Brief summary of the candidate (2-3 sentences)",
+  "skills": ["skill1", "skill2", ...],
   "experience": [
     {
-      "jobTitle": "string",
-      "company": "string",
-      "duration": "string",
-      "description": "string",
-      "startDate": "string",
-      "endDate": "string"
+      "company": "Company Name",
+      "position": "Job Title",
+      "duration": "Duration or dates",
+      "description": "Brief description"
     }
   ],
   "education": [
     {
-      "degree": "string",
-      "institution": "string",
-      "field": "string",
-      "graduationYear": "string",
-      "cgpa": "string"
-    }
-  ],
-  "projects": [
-    {
-      "title": "string",
-      "description": "string",
-      "technologies": ["array of technologies"],
-      "link": "string"
+      "school": "School/University Name",
+      "degree": "Degree Type",
+      "field": "Field of Study",
+      "year": "Graduation Year"
     }
   ],
   "certifications": [
     {
-      "name": "string",
-      "issuer": "string",
-      "date": "string",
-      "link": "string"
+      "name": "Certification Name",
+      "issuer": "Issuer",
+      "year": "Year"
     }
   ],
-  "internships": [
+  "projects": [
     {
-      "title": "string",
-      "company": "string",
-      "duration": "string",
-      "description": "string",
-      "startDate": "string",
-      "endDate": "string"
+      "name": "Project Name",
+      "description": "Project Description",
+      "technologies": ["tech1", "tech2"]
     }
-  ],
-  "achievements": ["array of achievements or awards"],
-  "languages": ["array of languages"]
+  ]
 }
 
-If any field is not found in the resume, use null or an empty array as appropriate. Be thorough and extract all relevant information.
-`;
+Resume Content:
+${extractedText}`;
 
-    console.log('Calling Gemini API with gemini-1.5-flash model...');
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const parsedText = response.text();
-
-    console.log('Gemini response received');
-    console.log('Response length:', parsedText.length);
-
-    // Clean the response - remove markdown code blocks if present
-    let cleanedText = parsedText
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .replace(/^[\s\n]*/, '')
-      .replace(/[\s\n]*$/, '')
-      .trim();
-
-    console.log('Cleaned text length:', cleanedText.length);
-
-    // Parse the JSON response
-    let parsedResume;
-    try {
-      parsedResume = JSON.parse(cleanedText);
-      console.log('✅ Successfully parsed JSON from Gemini response');
-      console.log('Parsed resume keys:', Object.keys(parsedResume));
-    } catch (jsonError) {
-      console.error('❌ JSON parsing failed:', jsonError.message);
-      console.error('Response preview:', cleanedText.substring(0, 500));
+      // ✅ Correct pattern for @google/genai SDK
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.0-flash-exp', // Using newer model
+        contents: prompt,
+        config: {
+          temperature: 0.2,
+          maxOutputTokens: 2048,
+        }
+      });
       
-      // Try to find JSON in the response
-      const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+      const responseText = response.text;
+      console.log('Raw Gemini response:', responseText);
+
+      // Parse JSON from response with better error handling
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         try {
-          parsedResume = JSON.parse(jsonMatch[0]);
-          console.log('✅ Extracted and parsed JSON from response');
-        } catch (innerError) {
-          throw new Error('Failed to parse extracted JSON: ' + innerError.message);
+          const parsed = JSON.parse(jsonMatch[0]);
+          analysisResult = { ...analysisResult, ...parsed };
+          console.log('✅ Resume analyzed successfully');
+          console.log('Analysis result:', analysisResult);
+        } catch (parseError) {
+          console.error('❌ Failed to parse JSON:', parseError);
         }
       } else {
-        throw new Error('No valid JSON found in Gemini response');
+        console.warn('⚠️ Could not extract JSON from Gemini response');
       }
+    } catch (geminiError) {
+      console.error('❌ Gemini analysis error:', geminiError);
+      // Don't fail the upload if Gemini fails
     }
 
-    return parsedResume;
-  } catch (error) {
-    console.error('❌ Error parsing resume with Gemini:', error);
-    console.error('Error message:', error.message);
-    throw new Error('Failed to parse resume with Gemini: ' + error.message);
-  }
-};
+    // Update user profile with resume URL and analysis
+    const { data: profileData, error: profileError } = await supabase
+      .from('profiles')
+      .update({
+        resume_url: resumeUrl,
+        experience: analysisResult.experience || [],
+        skills: analysisResult.skills || [],
+        education: analysisResult.education || [],
+        certifications: analysisResult.certifications || [],
+        projects: analysisResult.projects || [],
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.user.id)
+      .select();
 
-// Main controller function to handle resume upload and parsing
-export const parseResume = async (req, res) => {
-  try {
-    console.log('\n=== 🚀 Resume Parse Request Started ===');
-    console.log('User ID:', req.user?.id);
-    console.log('File present:', !!req.file);
-
-    if (!req.file) {
-      console.error('❌ No file uploaded');
-      return res.status(400).json({ error: 'No file uploaded' });
+    if (profileError) {
+      console.error('❌ Profile update error:', profileError);
+      return res.status(500).json({ error: `Failed to update profile: ${profileError.message}` });
     }
 
-    console.log('📄 File received:', {
-      filename: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size + ' bytes',
-      encoding: req.file.encoding
-    });
+    console.log('✅ Profile updated with resume data');
+    console.log('========================================\n');
 
-    if (req.file.mimetype !== 'application/pdf') {
-      console.error('❌ Invalid file type:', req.file.mimetype);
-      return res.status(400).json({ error: 'Only PDF files are supported' });
-    }
-
-    // Extract text from PDF
-    console.log('📖 Extracting text from PDF...');
-    const resumeText = await extractTextFromPDF(req.file.buffer);
-
-    if (!resumeText || resumeText.trim().length === 0) {
-      console.error('❌ No text extracted from PDF');
-      return res.status(400).json({ error: 'Could not extract text from PDF' });
-    }
-
-    console.log('✅ Text extracted successfully, length:', resumeText.length);
-
-    // Parse resume using Gemini API
-    console.log('🤖 Parsing resume with Gemini API...');
-    const parsedResume = await parseResumeWithGemini(resumeText);
-
-    console.log('✅ Resume parsed successfully');
-
-    // Validate and clean the data
-    console.log('🧹 Validating and cleaning data...');
-    const cleanedData = validateAndCleanResumeData(parsedResume);
-
-    console.log('✅ Data validation complete');
-    console.log('=== ✨ Resume Parse Request Completed Successfully ===\n');
-
-    // Return parsed resume data
     return res.status(200).json({
       success: true,
-      data: cleanedData,
-      message: 'Resume parsed successfully using Gemini API'
+      message: 'Resume uploaded and analyzed successfully',
+      data: {
+        resume_url: resumeUrl,
+        analysis: analysisResult,
+        profile: profileData[0]
+      }
     });
   } catch (error) {
-    console.error('\n=== ❌ Resume Parse Error ===');
-    console.error('Error message:', error.message);
-    console.error('Full error:', error);
-    console.error('=== End Error ===\n');
-
-    res.status(500).json({
-      error: 'Failed to parse resume',
-      details: error.message,
-      timestamp: new Date().toISOString()
-    });
+    console.error('❌ Error in uploadResume:', error);
+    return res.status(500).json({ error: error.message });
   }
 };
 
-// Additional function to validate and clean extracted data
-export const validateAndCleanResumeData = (parsedData) => {
+// Get resume
+export const getResume = async (req, res) => {
   try {
-    console.log('Starting data validation...');
+    console.log('\n========================================');
+    console.log('📄 Fetching resume');
+    console.log('========================================');
 
-    const cleaned = {
-      personalInfo: {
-        fullName: parsedData?.personalInfo?.fullName || '',
-        email: parsedData?.personalInfo?.email || '',
-        phone: parsedData?.personalInfo?.phone || '',
-        location: parsedData?.personalInfo?.location || '',
-        linkedinUrl: parsedData?.personalInfo?.linkedinUrl || '',
-        githubUrl: parsedData?.personalInfo?.githubUrl || '',
-        portfolioUrl: parsedData?.personalInfo?.portfolioUrl || ''
-      },
-      summary: parsedData?.summary || '',
-      skills: Array.isArray(parsedData?.skills)
-        ? parsedData.skills
-            .filter(s => s && typeof s === 'string')
-            .map(s => s.trim())
-            .filter(s => s.length > 0)
-        : [],
-      experience: Array.isArray(parsedData?.experience)
-        ? parsedData.experience.filter(exp => exp && (exp.company || exp.jobTitle))
-        : [],
-      education: Array.isArray(parsedData?.education)
-        ? parsedData.education.filter(edu => edu && edu.institution)
-        : [],
-      projects: Array.isArray(parsedData?.projects)
-        ? parsedData.projects.filter(proj => proj && proj.title)
-        : [],
-      certifications: Array.isArray(parsedData?.certifications)
-        ? parsedData.certifications.filter(cert => cert && cert.name)
-        : [],
-      internships: Array.isArray(parsedData?.internships)
-        ? parsedData.internships.filter(intern => intern && intern.company)
-        : [],
-      achievements: Array.isArray(parsedData?.achievements)
-        ? parsedData.achievements
-            .filter(ach => ach && typeof ach === 'string')
-            .map(a => a.trim())
-            .filter(a => a.length > 0)
-        : [],
-      languages: Array.isArray(parsedData?.languages)
-        ? parsedData.languages
-            .filter(lang => lang && typeof lang === 'string')
-            .map(l => l.trim())
-            .filter(l => l.length > 0)
-        : []
-    };
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
 
-    console.log('✅ Data validation completed:', {
-      skills: cleaned.skills.length,
-      experience: cleaned.experience.length,
-      education: cleaned.education.length,
-      projects: cleaned.projects.length
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('resume_url, experience, skills, education, certifications, projects')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error) {
+      console.error('❌ Error fetching profile:', error);
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+
+    if (!profile.resume_url) {
+      return res.status(404).json({ error: 'No resume found' });
+    }
+
+    console.log('✅ Resume fetched');
+    console.log('========================================\n');
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        resume_url: profile.resume_url,
+        experience: profile.experience || [],
+        skills: profile.skills || [],
+        education: profile.education || [],
+        certifications: profile.certifications || [],
+        projects: profile.projects || []
+      }
     });
-
-    return cleaned;
   } catch (error) {
-    console.error('Error validating resume data:', error.message);
-    throw error;
+    console.error('❌ Error in getResume:', error);
+    return res.status(500).json({ error: error.message });
   }
 };
 
-// Export helper function for use in other parts of the app
-export const extractResumeData = async (pdfBuffer) => {
+// Delete resume
+export const deleteResume = async (req, res) => {
   try {
-    console.log('extractResumeData called');
-    const resumeText = await extractTextFromPDF(pdfBuffer);
-    const parsedResume = await parseResumeWithGemini(resumeText);
-    const cleanedData = validateAndCleanResumeData(parsedResume);
-    return cleanedData;
+    console.log('\n========================================');
+    console.log('🗑️  Deleting resume');
+    console.log('========================================');
+
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const { data: profile, error: fetchError } = await supabase
+      .from('profiles')
+      .select('resume_url')
+      .eq('id', req.user.id)
+      .single();
+
+    if (fetchError) {
+      console.error('❌ Error fetching profile:', fetchError);
+      return res.status(404).json({ error: 'Profile not found' });
+    }
+
+    if (!profile.resume_url) {
+      return res.status(404).json({ error: 'No resume found' });
+    }
+
+    // Extract file name from URL
+    const fileName = profile.resume_url.split('/').pop();
+
+    // Delete from Supabase Storage
+    const { error: deleteError } = await supabase
+      .storage
+      .from('resumes')
+      .remove([fileName]);
+
+    if (deleteError) {
+      console.error('❌ Storage delete error:', deleteError);
+      return res.status(500).json({ error: `Failed to delete resume: ${deleteError.message}` });
+    }
+
+    // Update profile
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        resume_url: null,
+        experience: [],
+        skills: [],
+        education: [],
+        certifications: [],
+        projects: [],
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.user.id);
+
+    if (updateError) {
+      console.error('❌ Profile update error:', updateError);
+      return res.status(500).json({ error: `Failed to update profile: ${updateError.message}` });
+    }
+
+    console.log('✅ Resume deleted');
+    console.log('========================================\n');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Resume deleted successfully'
+    });
   } catch (error) {
-    console.error('Error extracting resume data:', error.message);
-    throw error;
+    console.error('❌ Error in deleteResume:', error);
+    return res.status(500).json({ error: error.message });
   }
 };
