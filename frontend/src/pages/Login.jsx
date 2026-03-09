@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState,useEffect } from 'react';
 import { supabase } from '../services/supabase';
 import { useNavigate, Link } from 'react-router-dom';
 import { Mail, Lock, LogIn } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Button from '../components/common/Button';
+import { useAuth } from '../context/AuthContext.jsx';
 
 const Login = () => {
   const [email, setEmail] = useState('');

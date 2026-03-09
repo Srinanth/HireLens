@@ -9,6 +9,7 @@ const Signup = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fullName, setFullName] = useState('');
   const navigate = useNavigate();
 
   const handleSignup = async (e) => {
