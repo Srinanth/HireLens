@@ -8,7 +8,7 @@ import rankingRoutes from './routes/rankingRoutes.js';
 import resumeRoutes from './routes/resumeRoutes.js';
 import roadmapRoutes from './routes/roadmapRoutes.js';
 import authRoutes from './routes/authRoutes.js'
-import applicationRoutes from './routes/applicationRoutes.js'
+
 import profileRoutes from './routes/profileRoutes.js';
 
 
@@ -27,7 +27,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/roadmap', roadmapRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/applications', applicationRoutes);
+
 
 app.get('/', (req, res) => {
   res.json({ message: "HireLens API is running with ES Modules..." });
