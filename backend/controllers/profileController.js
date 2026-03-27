@@ -58,7 +58,7 @@ export const saveProfile = async (req, res) => {
       github_username,
       linkedin_url,
       website_url,
-      resume_url,
+      // resume_url,
       skills,
       experience,
       education,
@@ -69,10 +69,10 @@ export const saveProfile = async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!full_name || !location || !college) {
-      console.error('❌ Missing required fields');
-      return res.status(400).json({ error: 'Full Name, Location, and College are required' });
-    }
+    // if (!full_name || !location || !college) {
+    //   console.error('❌ Missing required fields');
+    //   return res.status(400).json({ error: 'Full Name, Location, and College are required' });
+    // }
 
     console.log('Profile data received:', {
       full_name,
@@ -93,7 +93,7 @@ export const saveProfile = async (req, res) => {
       linkedin_url: linkedin_url || null,
       website_url: website_url || null,
       cgpa: cgpa ? parseFloat(cgpa) : null,
-      resume_url: resume_url || null,
+      resume_url: [],
       skills: skills || [],
       experience: experience || [],
       education: education || [],

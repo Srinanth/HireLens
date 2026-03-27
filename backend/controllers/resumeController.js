@@ -110,28 +110,30 @@ export const uploadResume = async (req, res) => {
     }
 
     // Upload to Supabase Storage
-    const fileName = `${req.user.id}-${Date.now()}.pdf`;
-    const { data: uploadData, error: uploadError } = await supabase
-      .storage
-      .from('resumes')
-      .upload(fileName, file.buffer, {
-        contentType: 'application/pdf',
-        upsert: false
-      });
+    // bro did not implement the bucket in supabase
+    
+    // const fileName = `${req.user.id}-${Date.now()}.pdf`;
+    // const { data: uploadData, error: uploadError } = await supabase
+    //   .storage
+    //   .from('resumes')
+    //   .upload(fileName, file.buffer, {
+    //     contentType: 'application/pdf',
+    //     upsert: false
+    //   });
 
-    if (uploadError) {
-      console.error('❌ Supabase upload error:', uploadError);
-      return res.status(500).json({ error: `Failed to upload resume: ${uploadError.message}` });
-    }
+    // if (uploadError) {
+    //   console.error('❌ Supabase upload error:', uploadError);
+    //   return res.status(500).json({ error: `Failed to upload resume: ${uploadError.message}` });
+    // }
 
-    // Get public URL
-    const { data: publicUrlData } = supabase
-      .storage
-      .from('resumes')
-      .getPublicUrl(fileName);
+    // // Get public URL
+    // const { data: publicUrlData } = supabase
+    //   .storage
+    //   .from('resumes')
+    //   .getPublicUrl(fileName);
 
-    const resumeUrl = publicUrlData.publicUrl;
-    console.log('✅ Resume uploaded to Supabase:', resumeUrl);
+    // const resumeUrl = publicUrlData.publicUrl;
+    // console.log('✅ Resume uploaded to Supabase:', resumeUrl);
 
     // Analyze resume with Gemini using the new SDK pattern
     console.log('🤖 Analyzing resume with Gemini...');
@@ -145,7 +147,9 @@ export const uploadResume = async (req, res) => {
     };
 
     try {
-      const prompt = `Analyze this resume and extract the following information in JSON format. Return ONLY the JSON object, no other text:
+      // Added a small instruction to escape quotes just as a fallback safety measure
+      const prompt = `Analyze this resume and extract the following information in JSON format. 
+Make sure to correctly escape all internal double quotes within strings.
 
 {
   "summary": "Brief summary of the candidate (2-3 sentences)",
@@ -185,33 +189,30 @@ export const uploadResume = async (req, res) => {
 Resume Content:
 ${extractedText}`;
 
-      // ✅ Correct pattern for @google/genai SDK
+      // ✅ Correct pattern for @google/genai SDK with JSON Mode enabled
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-exp', // Using newer model
+        model: 'gemini-2.5-flash', 
         contents: prompt,
         config: {
           temperature: 0.2,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json' // ✅ Enforces strict JSON output
         }
       });
       
       const responseText = response.text;
       console.log('Raw Gemini response:', responseText);
 
-      // Parse JSON from response with better error handling
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          analysisResult = { ...analysisResult, ...parsed };
-          console.log('✅ Resume analyzed successfully');
-          console.log('Analysis result:', analysisResult);
-        } catch (parseError) {
-          console.error('❌ Failed to parse JSON:', parseError);
-        }
-      } else {
-        console.warn('⚠️ Could not extract JSON from Gemini response');
+      // ✅ Parse JSON directly. With responseMimeType set, we don't need regex markdown stripping
+      try {
+        const parsed = JSON.parse(responseText);
+        analysisResult = { ...analysisResult, ...parsed };
+        console.log('✅ Resume analyzed successfully');
+        console.log('Analysis result:', analysisResult);
+      } catch (parseError) {
+        console.error('❌ Failed to parse JSON:', parseError);
       }
+      
     } catch (geminiError) {
       console.error('❌ Gemini analysis error:', geminiError);
       // Don't fail the upload if Gemini fails
@@ -221,7 +222,7 @@ ${extractedText}`;
     const { data: profileData, error: profileError } = await supabase
       .from('profiles')
       .update({
-        resume_url: resumeUrl,
+        resume_url: [],
         experience: analysisResult.experience || [],
         skills: analysisResult.skills || [],
         education: analysisResult.education || [],
@@ -244,7 +245,7 @@ ${extractedText}`;
       success: true,
       message: 'Resume uploaded and analyzed successfully',
       data: {
-        resume_url: resumeUrl,
+        resume_url:[],
         analysis: analysisResult,
         profile: profileData[0]
       }

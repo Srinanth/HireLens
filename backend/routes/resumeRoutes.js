@@ -27,7 +27,7 @@ const upload = multer({
 });
 
 // Upload resume (with PDF file)
-router.post('/upload', authMiddleware, upload.single('resume'), uploadResume);
+router.post('/parse', authMiddleware, upload.single('resume'), uploadResume);
 
 // Get resume
 router.get('/', authMiddleware, getResume);
