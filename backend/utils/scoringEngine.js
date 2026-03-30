@@ -2,224 +2,160 @@
  * Scoring Engine for calculating user rankings
  * Works with profiles table JSONB fields
  * Factors considered:
- * - Skills (20%)
+ * - Education/CGPA (30%) 
  * - Experience/Projects (20%)
- * - Education/CGPA (15%)
- * - Certifications (15%)
- * - GitHub Activity (15%)
+ * - Skills (15%)
  * - Internships (15%)
+ * - Certifications (10%)
+ * - GitHub Activity (10%)
  */
 
 export const calculateTotalScore = (profile) => {
   if (!profile) return 0;
 
   const scores = {
-    skillsScore: calculateSkillsScore(profile),
-    experienceScore: calculateExperienceScore(profile),
     educationScore: calculateEducationScore(profile),
+    experienceScore: calculateExperienceScore(profile),
+    skillsScore: calculateSkillsScore(profile),
+    internshipScore: calculateInternshipScore(profile),
     certificationsScore: calculateCertificationsScore(profile),
-    githubScore: calculateGitHubScore(profile),
-    internshipScore: calculateInternshipScore(profile)
+    githubScore: calculateGitHubScore(profile)
   };
 
-  // Weighted scoring
+  // Weighted scoring based on updated distribution
   const totalScore = 
-    (scores.skillsScore * 0.20) +
+    (scores.educationScore * 0.30) +
     (scores.experienceScore * 0.20) +
-    (scores.educationScore * 0.15) +
-    (scores.certificationsScore * 0.15) +
-    (scores.githubScore * 0.15) +
-    (scores.internshipScore * 0.15);
+    (scores.skillsScore * 0.15) +
+    (scores.internshipScore * 0.15) +
+    (scores.certificationsScore * 0.10) +
+    (scores.githubScore * 0.10);
 
   return Math.round(totalScore * 100) / 100; // Round to 2 decimals
 };
 
 /**
- * Calculate skills score (0-100)
- * Based on number of skills and their proficiency levels
- */
-export const calculateSkillsScore = (profile) => {
-  const skills = Array.isArray(profile.skills) ? profile.skills : [];
-  
-  if (!skills || skills.length === 0) return 0;
-
-  const skillCount = skills.length || 0;
-  const maxSkillsPoints = 50; // Max points from count
-  const proficiencyPoints = 50; // Max points from proficiency levels
-
-  // Points for number of skills (max 50)
-  const skillCountScore = Math.min(skillCount * 5, maxSkillsPoints);
-
-  // Points for proficiency levels
-  let proficiencyScore = 0;
-  if (skills.length > 0) {
-    const proficiencyLevels = {
-      'Beginner': 10,
-      'Intermediate': 25,
-      'Advanced': 40,
-      'Expert': 50
-    };
-
-    proficiencyScore = skills.reduce((total, skill) => {
-      const level = typeof skill === 'object' ? skill.proficiency_level : 'Beginner';
-      return total + (proficiencyLevels[level] || 10);
-    }, 0) / Math.max(skills.length, 1);
-  }
-
-  return Math.min(skillCountScore + proficiencyScore, 100);
-};
-
-/**
- * Calculate experience score (0-100)
- * Based on projects and experience duration
- */
-export const calculateExperienceScore = (profile) => {
-  let score = 0;
-
-  // Projects score (max 50 points)
-  const projects = Array.isArray(profile.projects) ? profile.projects : [];
-  const projectCount = projects.length || 0;
-  const projectScore = Math.min(projectCount * 10, 50);
-
-  // Experience score (max 50 points)
-  const experience = Array.isArray(profile.experience) ? profile.experience : [];
-  const experienceCount = experience.length || 0;
-  const experienceScore = Math.min(experienceCount * 15, 50);
-
-  score = projectScore + experienceScore;
-  return Math.min(score, 100);
-};
-
-/**
  * Calculate education score (0-100)
- * Based on CGPA and education records
+ * Heavily relies on normalized CGPA on a 10-point scale
  */
 export const calculateEducationScore = (profile) => {
   let score = 0;
 
-  // CGPA score (max 60 points)
-  // Scale: 4.0 GPA = 60 points
-  const cgpa = parseFloat(profile.cgpa) || 0;
-  const cgpaScore = Math.min((cgpa / 4.0) * 60, 60);
+  // 1. CGPA Calculation (Max 80 points of the education score)
+  if (profile.cgpa) {
+    let cgpaNum = parseFloat(profile.cgpa);
+    
+    // Auto-normalize percentages to a 10-point scale (e.g., 85% becomes 8.5)
+    if (cgpaNum > 10 && cgpaNum <= 100) {
+      cgpaNum = cgpaNum / 10; 
+    }
+    
+    if (cgpaNum <= 10 && cgpaNum > 0) {
+      // Example: 8.5 CGPA yields (8.5 / 10) * 80 = 68 points
+      score += (cgpaNum / 10) * 80;
+    }
+  }
 
-  // Education records score (max 40 points)
+  // 2. Education Records Presence (Max 20 points)
   const education = Array.isArray(profile.education) ? profile.education : [];
-  const educationCount = education.length || 0;
-  const educationScore = Math.min(educationCount * 20, 40);
+  // 10 points per degree/institution listed, capped at 2
+  score += Math.min(education.length * 10, 20);
 
-  score = cgpaScore + educationScore;
+  return Math.min(score, 100);
+};
+
+/**
+ * Calculate experience score (0-100)
+ * Balances real experience and personal projects
+ */
+export const calculateExperienceScore = (profile) => {
+  let score = 0;
+
+  // Projects (Max 50 points) - 25 points per project, capped at 2
+  const projects = Array.isArray(profile.projects) ? profile.projects : [];
+  const projectScore = Math.min(projects.length * 25, 50);
+
+  // Experience (Max 50 points) - 25 points per role, capped at 2
+  const experience = Array.isArray(profile.experience) ? profile.experience : [];
+  const expScore = Math.min(experience.length * 25, 50);
+
+  score = projectScore + expScore;
+  return Math.min(score, 100);
+};
+
+/**
+ * Calculate skills score (0-100)
+ * Based on pure count, strictly capped to prevent keyword stuffing
+ */
+export const calculateSkillsScore = (profile) => {
+  const skills = Array.isArray(profile.skills) ? profile.skills : [];
+  
+  if (skills.length === 0) return 0;
+
+  // 10 points per skill, capped at 100 (10 skills max)
+  // This prevents users from copying/pasting 50 keywords to get 100%
+  return Math.min(skills.length * 10, 100);
+};
+
+/**
+ * Calculate internship score (0-100)
+ * Based on presence and top-tier companies
+ */
+export const calculateInternshipScore = (profile) => {
+  const internships = Array.isArray(profile.internships) ? profile.internships : [];
+  
+  if (internships.length === 0) return 0;
+
+  let score = 0;
+  const prestigeCompanies = ['google', 'microsoft', 'amazon', 'apple', 'meta', 'facebook', 'netflix', 'ibm', 'tcs', 'infosys', 'wipro'];
+
+  internships.forEach(internship => {
+    // 40 base points per internship
+    let currentInternScore = 40; 
+
+    // +10 bonus points for recognized/prestige companies
+    const company = (internship.company || '').toLowerCase();
+    if (prestigeCompanies.some(pc => company.includes(pc))) {
+      currentInternScore += 10;
+    }
+
+    score += currentInternScore;
+  });
+
+  // Cap at 100 points (effectively maxes out at 2-3 internships)
   return Math.min(score, 100);
 };
 
 /**
  * Calculate certifications score (0-100)
- * Based on number and recency of certifications
+ * Based on count, capped to prevent spam
  */
 export const calculateCertificationsScore = (profile) => {
   const certifications = Array.isArray(profile.certifications) ? profile.certifications : [];
   
-  if (!certifications || certifications.length === 0) return 0;
+  if (certifications.length === 0) return 0;
 
-  const certCount = certifications.length || 0;
-  const maxCertsPoints = 50; // Max points from count
-
-  // Points for number of certifications (max 50)
-  const certCountScore = Math.min(certCount * 10, maxCertsPoints);
-
-  // Points for certification recency
-  let recencyScore = 0;
-  if (certifications.length > 0) {
-    recencyScore = certifications.reduce((total, cert) => {
-      if (!cert.issued_date) return total;
-
-      const issueDate = new Date(cert.issued_date);
-      const monthsAgo = (new Date() - issueDate) / (1000 * 60 * 60 * 24 * 30);
-
-      // Recent certs (< 6 months) = 10 points
-      // Medium (6-12 months) = 7 points
-      // Older (> 12 months) = 3 points
-      let points = 3;
-      if (monthsAgo < 6) points = 10;
-      else if (monthsAgo < 12) points = 7;
-
-      return total + points;
-    }, 0) / Math.max(certifications.length, 1);
-  }
-
-  return Math.min(certCountScore + recencyScore, 100);
+  // 25 points per certification, capped at 4 certifications
+  return Math.min(certifications.length * 25, 100);
 };
 
 /**
  * Calculate GitHub score (0-100)
- * Based on GitHub username presence and profile activity
+ * Rewards having a profile and having projects with linked tech/repos
  */
 export const calculateGitHubScore = (profile) => {
-  if (!profile.github_username) return 0;
+  if (!profile.github_username || profile.github_username.trim() === '') return 0;
 
-  // For now, just having a GitHub username gives points
-  // Can be expanded with GitHub API integration later
-  const baseScore = 30; // Base points for having GitHub
+  // Base 50 points just for providing a GitHub username
+  let score = 50; 
 
-  // Additional points based on other factors
-  let additionalScore = 0;
-
-  // Projects on GitHub (assuming projects are documented with links)
+  // Additional 10 points per project that lists specific technologies (implies active coding)
   const projects = Array.isArray(profile.projects) ? profile.projects : [];
-  const githubProjects = projects.filter(p => 
-    p && (p.github_url || p.repository_url)
-  ).length;
-  additionalScore += Math.min(githubProjects * 5, 40);
-
-  // Experience shows activity
-  const experience = Array.isArray(profile.experience) ? profile.experience : [];
-  if (experience.length > 0) {
-    additionalScore += Math.min(experience.length * 5, 30);
-  }
-
-  return Math.min(baseScore + additionalScore, 100);
-};
-
-/**
- * Calculate internship score (0-100)
- * Based on number and prestige of internships
- */
-export const calculateInternshipScore = (profile) => {
-  const internships = Array.isArray(profile.internships) ? profile.internships : [];
+  const techProjects = projects.filter(p => Array.isArray(p.technologies) && p.technologies.length > 0).length;
   
-  if (!internships || internships.length === 0) return 0;
+  score += Math.min(techProjects * 10, 50); // Capped at 5 well-documented projects
 
-  const internshipCount = internships.length || 0;
-  const maxInternshipPoints = 50; // Max points from count
-
-  // Points for number of internships (max 50)
-  const internshipCountScore = Math.min(internshipCount * 15, maxInternshipPoints);
-
-  // Points for internship prestige and duration
-  let prestigeScore = 0;
-  if (internships.length > 0) {
-    prestigeScore = internships.reduce((total, internship) => {
-      let points = 10; // Base points
-
-      // Add prestige points (top companies get more)
-      const prestigeCompanies = ['Google', 'Microsoft', 'Facebook', 'Apple', 'Amazon', 'Netflix', 'Meta'];
-      const company = internship.company || '';
-      if (prestigeCompanies.some(pCompany => 
-        company.toLowerCase().includes(pCompany.toLowerCase())
-      )) {
-        points += 15;
-      }
-
-      // Add duration points (longer = better, max 6 months = 10 points)
-      if (internship.end_date && internship.start_date) {
-        const duration = (new Date(internship.end_date) - new Date(internship.start_date)) / (1000 * 60 * 60 * 24 * 30);
-        points += Math.min(duration * 1.67, 10);
-      }
-
-      return total + points;
-    }, 0) / Math.max(internships.length, 1);
-  }
-
-  return Math.min(internshipCountScore + prestigeScore, 100);
+  return Math.min(score, 100);
 };
 
 /**
@@ -238,15 +174,15 @@ export const calculateCategoryScores = (profile) => {
 };
 
 /**
- * Get ranking tier based on score
+ * Get ranking tier based on overall score (out of 100)
  */
 export const getRankingTier = (score) => {
-  if (score >= 90) return 'Legendary';
-  if (score >= 80) return 'Expert';
-  if (score >= 70) return 'Advanced';
-  if (score >= 60) return 'Intermediate';
-  if (score >= 50) return 'Developing';
-  if (score >= 40) return 'Beginner';
+  if (score >= 85) return 'Legendary';
+  if (score >= 75) return 'Expert';
+  if (score >= 60) return 'Advanced';
+  if (score >= 45) return 'Intermediate';
+  if (score >= 30) return 'Developing';
+  if (score >= 15) return 'Beginner';
   return 'Starter';
 };
 
