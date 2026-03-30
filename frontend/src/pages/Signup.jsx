@@ -12,7 +12,7 @@ const Signup = () => {
   const [fullName, setFullName] = useState('');
   const navigate = useNavigate();
 
-  const handleSignup = async (e) => {
+const handleSignup = async (e) => {
     e.preventDefault();
     setLoading(true);
 
@@ -21,6 +21,9 @@ const Signup = () => {
         email,
         password,
         options: {
+          data: {
+            full_name: fullName,
+          },
           emailRedirectTo: `${window.location.origin}/auth/callback`
         }
       });
@@ -31,7 +34,6 @@ const Signup = () => {
       }
 
       if (data?.user) {
-        // Get the session to store the token
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session?.access_token) {

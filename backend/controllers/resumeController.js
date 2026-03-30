@@ -137,7 +137,8 @@ export const uploadResume = async (req, res) => {
 
     // Analyze resume with Gemini using the new SDK pattern
     console.log('🤖 Analyzing resume with Gemini...');
-    let analysisResult = {
+let analysisResult = {
+      personalInfo: {},
       summary: '',
       skills: [],
       experience: [],
@@ -147,13 +148,21 @@ export const uploadResume = async (req, res) => {
     };
 
     try {
-      // Added a small instruction to escape quotes just as a fallback safety measure
       const prompt = `Analyze this resume and extract the following information in JSON format. 
 Make sure to correctly escape all internal double quotes within strings.
 
 {
+  "personalInfo": {
+    "full_name": "Candidate's full name",
+    "email": "Email address",
+    "phone": "Phone number",
+    "location": "City, State, or Country",
+    "githubUrl": "GitHub Profile URL if present",
+    "linkedinUrl": "LinkedIn Profile URL if present",
+    "portfolioUrl": "Personal website or portfolio URL if present"
+  },
   "summary": "Brief summary of the candidate (2-3 sentences)",
-  "skills": ["skill1", "skill2", ...],
+  "skills": ["skill1", "skill2"],
   "experience": [
     {
       "company": "Company Name",
@@ -189,64 +198,67 @@ Make sure to correctly escape all internal double quotes within strings.
 Resume Content:
 ${extractedText}`;
 
-      // ✅ Correct pattern for @google/genai SDK with JSON Mode enabled
       const response = await genAI.models.generateContent({
         model: 'gemini-2.5-flash', 
         contents: prompt,
         config: {
           temperature: 0.2,
           maxOutputTokens: 8192,
-          responseMimeType: 'application/json' // ✅ Enforces strict JSON output
+          responseMimeType: 'application/json' 
         }
       });
       
       const responseText = response.text;
       console.log('Raw Gemini response:', responseText);
 
-      // ✅ Parse JSON directly. With responseMimeType set, we don't need regex markdown stripping
       try {
         const parsed = JSON.parse(responseText);
         analysisResult = { ...analysisResult, ...parsed };
         console.log('✅ Resume analyzed successfully');
-        console.log('Analysis result:', analysisResult);
       } catch (parseError) {
         console.error('❌ Failed to parse JSON:', parseError);
       }
       
     } catch (geminiError) {
       console.error('❌ Gemini analysis error:', geminiError);
-      // Don't fail the upload if Gemini fails
     }
 
-    // Update user profile with resume URL and analysis
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .update({
-        resume_url: [],
+  const updatePayload = {
+        resume_url: null,
         experience: analysisResult.experience || [],
         skills: analysisResult.skills || [],
         education: analysisResult.education || [],
         certifications: analysisResult.certifications || [],
         projects: analysisResult.projects || [],
         updated_at: new Date().toISOString()
-      })
-      .eq('id', req.user.id)
-      .select();
+      };
+
+      // 2. Add the Personal Info directly to the database payload
+      // We check if Gemini found them so we don't accidentally overwrite existing data with undefined
+      if (analysisResult.personalInfo?.full_name) updatePayload.full_name = analysisResult.personalInfo.full_name;
+      if (analysisResult.personalInfo?.location) updatePayload.location = analysisResult.personalInfo.location;
+      if (analysisResult.personalInfo?.githubUrl) updatePayload.github_username = analysisResult.personalInfo.githubUrl;
+      if (analysisResult.personalInfo?.linkedinUrl) updatePayload.linkedin_url = analysisResult.personalInfo.linkedinUrl;
+      if (analysisResult.personalInfo?.portfolioUrl) updatePayload.website_url = analysisResult.personalInfo.portfolioUrl;
+
+      // 3. Update the database with EVERYTHING at once
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .update(updatePayload)
+        .eq('id', req.user.id)
+        .select();
 
     if (profileError) {
       console.error('❌ Profile update error:', profileError);
       return res.status(500).json({ error: `Failed to update profile: ${profileError.message}` });
     }
 
-    console.log('✅ Profile updated with resume data');
-    console.log('========================================\n');
-
     return res.status(200).json({
       success: true,
       message: 'Resume uploaded and analyzed successfully',
       data: {
-        resume_url:[],
-        analysis: analysisResult,
+        ...analysisResult,
+        resume_url: null,
         profile: profileData[0]
       }
     });
